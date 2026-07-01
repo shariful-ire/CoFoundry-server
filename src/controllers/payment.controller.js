@@ -53,6 +53,37 @@ export async function createCheckout(req, res) {
   }
 }
 
+/* POST /api/payment/mock-checkout — sandbox activation, used as a fallback
+ * when Stripe isn't configured with real keys yet, so the premium flow
+ * stays fully demonstrable end-to-end. Records a real Payment (status
+ * 'paid') and flips isPremium, same as a real webhook would. */
+export async function mockCheckout(req, res) {
+  try {
+    const { plan } = req.body;
+    if (!['monthly', 'annual'].includes(plan))
+      return res.status(400).json({ message: 'Invalid plan' });
+
+    const user = await User.findById(req.user.userId);
+    const mockSessionId = `mock_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+
+    await Payment.create({
+      userId:          req.user.userId,
+      userEmail:       user.email,
+      stripeSessionId: mockSessionId,
+      plan,
+      amount:          PRICES[plan],
+      status:          'paid',
+      paidAt:          new Date(),
+    });
+
+    await User.findByIdAndUpdate(req.user.userId, { isPremium: true });
+
+    res.json({ sessionId: mockSessionId });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+}
+
 /* POST /api/payment/webhook — Stripe calls this after payment */
 export async function stripeWebhook(req, res) {
   const sig = req.headers['stripe-signature'];
