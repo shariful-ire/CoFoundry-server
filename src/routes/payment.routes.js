@@ -1,5 +1,4 @@
 import { Router } from 'express';
-import express from 'express';
 import { createCheckout, stripeWebhook } from '../controllers/payment.controller.js';
 import { verifyToken } from '../middleware/verifyToken.js';
 
@@ -7,7 +6,7 @@ const router = Router();
 
 router.post('/create-checkout', verifyToken, createCheckout);
 
-// Stripe sends raw body — must bypass express.json() for this route
-router.post('/webhook', express.raw({ type: 'application/json' }), stripeWebhook);
+// Raw body parsing for this route is configured in app.js (must run before express.json())
+router.post('/webhook', stripeWebhook);
 
 export default router;
