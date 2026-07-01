@@ -6,6 +6,7 @@ const userSchema = new mongoose.Schema({
   passwordHash: { type: String },
   role:         { type: String, enum: ['founder', 'collaborator', 'admin'], default: 'collaborator' },
   image:        { type: String, default: null },
+  phone:        { type: String, default: null, maxlength: 20 },
   isPremium:    { type: Boolean, default: false },
   isBlocked:    { type: Boolean, default: false },
   bio:          { type: String, maxlength: 300 },

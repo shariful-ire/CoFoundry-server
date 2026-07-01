@@ -4,14 +4,14 @@ import User from '../models/User.js';
 /* POST /api/startups — founder creates their startup */
 export async function createStartup(req, res) {
   try {
-    const { startupName, industry, fundingStage, description } = req.body;
+    const { startupName, industry, fundingStage, description, logo } = req.body;
     const founder = await User.findById(req.user.userId);
 
     const existing = await Startup.findOne({ founderId: req.user.userId });
     if (existing) return res.status(409).json({ message: 'You already have a startup' });
 
     const startup = await Startup.create({
-      startupName, industry, fundingStage, description,
+      startupName, industry, fundingStage, description, logo,
       founderId:    req.user.userId,
       founderEmail: founder.email, // set server-side — never from body
     });
@@ -38,8 +38,8 @@ export async function updateStartup(req, res) {
     const startup = await Startup.findOne({ _id: req.params.id, founderId: req.user.userId });
     if (!startup) return res.status(404).json({ message: 'Startup not found' });
 
-    const { startupName, industry, fundingStage, description } = req.body;
-    Object.assign(startup, { startupName, industry, fundingStage, description });
+    const { startupName, industry, fundingStage, description, logo } = req.body;
+    Object.assign(startup, { startupName, industry, fundingStage, description, ...(logo && { logo }) });
     await startup.save();
     res.json(startup);
   } catch (err) {
@@ -66,10 +66,11 @@ export async function getAllStartups(req, res) {
     const skip  = (page - 1) * limit;
 
     const filter = { status: 'approved' };
-    if (req.query.industry) filter.industry = req.query.industry;
+    if (req.query.industry)     filter.industry     = req.query.industry;
+    if (req.query.fundingStage) filter.fundingStage = req.query.fundingStage;
 
     const [data, totalCount] = await Promise.all([
-      Startup.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit),
+      Startup.find(filter).populate('founderId', 'name').sort({ createdAt: -1 }).skip(skip).limit(limit),
       Startup.countDocuments(filter),
     ]);
     res.json({ data, totalCount, totalPages: Math.ceil(totalCount / limit), page });
@@ -81,7 +82,7 @@ export async function getAllStartups(req, res) {
 /* GET /api/startups/:id — public detail */
 export async function getStartupById(req, res) {
   try {
-    const startup = await Startup.findById(req.params.id);
+    const startup = await Startup.findById(req.params.id).populate('founderId', 'name email');
     if (!startup) return res.status(404).json({ message: 'Startup not found' });
     res.json(startup);
   } catch (err) {

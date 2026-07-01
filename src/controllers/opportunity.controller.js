@@ -21,6 +21,7 @@ export async function createOpportunity(req, res) {
     const opp = await Opportunity.create({
       startupId:    startup._id,
       founderEmail: founder.email, // set server-side — never from body
+      industry:     startup.industry, // denormalized from the startup for filtering
       roleTitle, requiredSkills, workType, commitmentLevel, deadline,
     });
     res.status(201).json(opp);
@@ -50,7 +51,21 @@ export async function getAllOpportunities(req, res) {
     const skip  = (page - 1) * limit;
 
     const filter = { deadline: { $gte: new Date() } };
-    if (req.query.workType) filter.workType = req.query.workType;
+    if (req.query.startupId) filter.startupId = req.query.startupId;
+
+    // Filter by Work Type / Industry — comma-separated values, matched with $in
+    if (req.query.workType) {
+      filter.workType = { $in: String(req.query.workType).split(',').map((s) => s.trim()).filter(Boolean) };
+    }
+    if (req.query.industry) {
+      filter.industry = { $in: String(req.query.industry).split(',').map((s) => s.trim()).filter(Boolean) };
+    }
+
+    // Search by Role Title / Required Skills — case-insensitive regex
+    if (req.query.search) {
+      const regex = new RegExp(req.query.search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      filter.$or = [{ roleTitle: regex }, { requiredSkills: regex }];
+    }
 
     const [data, totalCount] = await Promise.all([
       Opportunity.find(filter).populate('startupId', 'startupName industry').sort({ createdAt: -1 }).skip(skip).limit(limit),
@@ -76,7 +91,8 @@ export async function getOpportunityById(req, res) {
 /* PUT /api/opportunities/:id */
 export async function updateOpportunity(req, res) {
   try {
-    const opp = await Opportunity.findOne({ _id: req.params.id, founderEmail: req.user.email });
+    const founder = await User.findById(req.user.userId);
+    const opp = await Opportunity.findOne({ _id: req.params.id, founderEmail: founder.email });
     if (!opp) return res.status(404).json({ message: 'Opportunity not found' });
     const { roleTitle, requiredSkills, workType, commitmentLevel, deadline } = req.body;
     Object.assign(opp, { roleTitle, requiredSkills, workType, commitmentLevel, deadline });

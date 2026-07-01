@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 
 const startupSchema = new mongoose.Schema({
   startupName:  { type: String, required: true, trim: true, minlength: 2 },
+  logo:         { type: String, default: null },
   founderEmail: { type: String, required: true, lowercase: true },  // set server-side from session
   founderId:    { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   industry:     { type: String, required: true },
