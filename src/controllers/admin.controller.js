@@ -1,5 +1,6 @@
 import User from '../models/User.js';
 import Startup from '../models/Startup.js';
+import Opportunity from '../models/Opportunity.js';
 import Payment from '../models/Payment.js';
 
 /* GET /api/admin/users */
@@ -68,9 +69,27 @@ export async function removeStartup(req, res) {
 /* GET /api/admin/transactions */
 export async function getTransactions(req, res) {
   try {
-    const payments = await Payment.find().sort({ createdAt: -1 });
-    const totalRevenue = payments.filter(p => p.status === 'paid').reduce((s, p) => s + p.amount, 0);
+    const payments = await Payment.find().populate('userId', 'name email').sort({ createdAt: -1 });
+    const totalRevenue = payments
+      .filter((p) => p.status === 'paid')
+      .reduce((s, p) => s + p.amount, 0) / 100; // cents → dollars
     res.json({ payments, totalRevenue });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+}
+
+/* GET /api/admin/stats */
+export async function getAdminStats(req, res) {
+  try {
+    const [userCount, startupCount, opportunityCount, paidPayments] = await Promise.all([
+      User.countDocuments(),
+      Startup.countDocuments(),
+      Opportunity.countDocuments(),
+      Payment.find({ status: 'paid' }),
+    ]);
+    const totalRevenue = paidPayments.reduce((s, p) => s + p.amount, 0) / 100;
+    res.json({ userCount, startupCount, opportunityCount, totalRevenue });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }

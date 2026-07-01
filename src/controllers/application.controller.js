@@ -1,5 +1,6 @@
 import Application from '../models/Application.js';
 import Opportunity from '../models/Opportunity.js';
+import Startup from '../models/Startup.js';
 import User from '../models/User.js';
 
 /* POST /api/applications — collaborator applies */
@@ -57,6 +58,26 @@ export async function getApplicationsForOpportunity(req, res) {
       return res.status(403).json({ message: 'Forbidden' });
 
     const apps = await Application.find({ opportunityId: req.params.oppId }).sort({ createdAt: -1 });
+    res.json(apps);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+}
+
+/* GET /api/applications/founder — all apps across founder's opportunities */
+export async function getFounderApplications(req, res) {
+  try {
+    const startup = await Startup.findOne({ founderId: req.user.userId });
+    if (!startup) return res.json([]);
+
+    const opps   = await Opportunity.find({ startupId: startup._id }).select('_id');
+    const oppIds = opps.map((o) => o._id);
+
+    const apps = await Application.find({ opportunityId: { $in: oppIds } })
+      .populate('opportunityId', 'roleTitle')
+      .populate('applicantId',   'name email image')
+      .sort({ createdAt: -1 });
+
     res.json(apps);
   } catch (err) {
     res.status(500).json({ message: err.message });
