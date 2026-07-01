@@ -23,7 +23,10 @@ export async function register(req, res) {
     if (exists) return res.status(409).json({ message: 'Email already in use' });
 
     const passwordHash = await bcrypt.hash(password, 12);
-    const user = await User.create({ name, email: email.toLowerCase(), passwordHash, role });
+    const user = await User.create({
+      name, email: email.toLowerCase(), passwordHash, role,
+      ...(req.body.image && { image: req.body.image }),
+    });
 
     const token = await signToken({ userId: user._id.toString(), role: user.role, isPremium: user.isPremium });
     setTokenCookie(res, token);
@@ -80,4 +83,153 @@ export async function me(req, res) {
 export async function signout(_req, res) {
   clearTokenCookie(res);
   res.json({ message: 'Signed out' });
+}
+
+const ROLE_DEST = {
+  admin:        '/dashboard/admin',
+  founder:      '/dashboard/founder',
+  collaborator: '/dashboard/collaborator',
+};
+
+/* GET /api/auth/google?role=founder|collaborator
+ * `role` is only sent from the Register page, where it's chosen upfront.
+ * The Login page omits it entirely — a brand-new account in that case gets
+ * bounced to Register to pick a role, rather than defaulting to one. */
+export function googleRedirect(req, res) {
+  const state = ['founder', 'collaborator'].includes(req.query.role) ? req.query.role : 'login';
+  const params = new URLSearchParams({
+    client_id:     process.env.GOOGLE_CLIENT_ID,
+    redirect_uri:  process.env.GOOGLE_CALLBACK_URL,
+    response_type: 'code',
+    scope:         'openid email profile',
+    access_type:   'online',
+    prompt:        'select_account',
+    state,
+  });
+  res.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params}`);
+}
+
+/* GET /api/auth/google/callback */
+export async function googleCallback(req, res) {
+  const { code, state } = req.query;
+  const clientUrl = process.env.CLIENT_URL || 'http://localhost:3000';
+  const requestedRole = ['founder', 'collaborator'].includes(state) ? state : null;
+
+  if (!code) return res.redirect(`${clientUrl}/login?error=google_cancelled`);
+
+  try {
+    // Exchange code for tokens
+    const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body:    new URLSearchParams({
+        code,
+        client_id:     process.env.GOOGLE_CLIENT_ID,
+        client_secret: process.env.GOOGLE_CLIENT_SECRET,
+        redirect_uri:  process.env.GOOGLE_CALLBACK_URL,
+        grant_type:    'authorization_code',
+      }),
+    });
+    const tokens = await tokenRes.json();
+    if (tokens.error) throw new Error(tokens.error_description ?? tokens.error);
+
+    // Get user profile from Google
+    const infoRes = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+      headers: { Authorization: `Bearer ${tokens.access_token}` },
+    });
+    const profile = await infoRes.json();
+
+    // Existing account (by googleId or email) — sign in with their saved role.
+    let user = await User.findOne({ $or: [{ googleId: profile.sub }, { email: profile.email }] });
+    if (user) {
+      if (!user.googleId) { user.googleId = profile.sub; await user.save(); }
+      if (user.isBlocked) return res.redirect(`${clientUrl}/login?error=blocked`);
+
+      const exchangeToken = await signToken({ userId: user._id.toString(), exchange: true }, '5m');
+      return res.redirect(`${clientUrl}/auth/google/callback?token=${exchangeToken}`);
+    }
+
+    // No account yet, and a role was already chosen on the Register page —
+    // create the account immediately.
+    if (requestedRole) {
+      user = await User.create({
+        name:     profile.name,
+        email:    profile.email,
+        googleId: profile.sub,
+        image:    profile.picture ?? null,
+        role:     requestedRole,
+      });
+      const exchangeToken = await signToken({ userId: user._id.toString(), exchange: true }, '5m');
+      return res.redirect(`${clientUrl}/auth/google/callback?token=${exchangeToken}`);
+    }
+
+    // No account, and this came from the Login page (no role chosen) —
+    // send them to Register to pick a role before we create anything.
+    const pendingToken = await signToken({
+      pendingGoogleSignup: true,
+      googleId: profile.sub,
+      email:    profile.email,
+      name:     profile.name,
+      image:    profile.picture ?? null,
+    }, '10m');
+    res.redirect(`${clientUrl}/register?googleToken=${encodeURIComponent(pendingToken)}`);
+  } catch (err) {
+    console.error('Google OAuth error:', err.message);
+    const detail = encodeURIComponent(err.message ?? 'unknown');
+    res.redirect(`${clientUrl}/login?error=google_failed&detail=${detail}`);
+  }
+}
+
+/* POST /api/auth/google/complete */
+export async function completeGoogleAuth(req, res) {
+  try {
+    const { token } = req.body;
+    if (!token) return res.status(400).json({ message: 'Token required' });
+
+    const payload = await verifyJWT(token);
+    if (!payload.exchange) return res.status(401).json({ message: 'Invalid exchange token' });
+
+    const user = await User.findById(payload.userId);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+    if (user.isBlocked) return res.status(403).json({ message: 'Account suspended' });
+
+    const authToken = await signToken({ userId: user._id.toString(), role: user.role, isPremium: user.isPremium });
+    setTokenCookie(res, authToken);
+    res.json({ user });
+  } catch {
+    res.status(401).json({ message: 'Invalid or expired token' });
+  }
+}
+
+/* POST /api/auth/google/finish-signup — completes a brand-new Google
+ * account once the user has picked a role on the Register page. */
+export async function finishGoogleSignup(req, res) {
+  try {
+    const { googleToken, role } = req.body;
+    if (!googleToken) return res.status(400).json({ message: 'Missing Google token' });
+    if (!['founder', 'collaborator'].includes(role))
+      return res.status(400).json({ message: 'Please select a role' });
+
+    const payload = await verifyJWT(googleToken);
+    if (!payload.pendingGoogleSignup) return res.status(401).json({ message: 'Invalid signup token' });
+
+    // Re-check in case the account was already created in the meantime.
+    let user = await User.findOne({ $or: [{ googleId: payload.googleId }, { email: payload.email }] });
+    if (!user) {
+      user = await User.create({
+        name:     payload.name,
+        email:    payload.email,
+        googleId: payload.googleId,
+        image:    payload.image ?? null,
+        role,
+      });
+    }
+    if (user.isBlocked) return res.status(403).json({ message: 'Account suspended' });
+
+    const authToken = await signToken({ userId: user._id.toString(), role: user.role, isPremium: user.isPremium });
+    setTokenCookie(res, authToken);
+    res.json({ user });
+  } catch {
+    res.status(401).json({ message: 'Invalid or expired signup token' });
+  }
 }
