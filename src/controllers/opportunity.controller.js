@@ -4,10 +4,13 @@ import User from '../models/User.js';
 
 const FREE_LIMIT = 3;
 
-/* POST /api/opportunities */
+/* POST /api/opportunities — startupId picks which of the founder's (possibly several) startups this belongs to */
 export async function createOpportunity(req, res) {
   try {
-    const startup = await Startup.findOne({ founderId: req.user.userId, status: 'approved' });
+    const { startupId } = req.body;
+    if (!startupId) return res.status(400).json({ message: 'Please select a startup' });
+
+    const startup = await Startup.findOne({ _id: startupId, founderId: req.user.userId, status: 'approved' });
     if (!startup) return res.status(404).json({ message: 'Approved startup not found' });
 
     const founder = await User.findById(req.user.userId);
@@ -30,13 +33,16 @@ export async function createOpportunity(req, res) {
   }
 }
 
-/* GET /api/opportunities/mine — founder's opportunities */
+/* GET /api/opportunities/mine — founder's opportunities, across all of their startups */
 export async function getMyOpportunities(req, res) {
   try {
-    const startup = await Startup.findOne({ founderId: req.user.userId });
-    if (!startup) return res.json({ data: [], totalCount: 0 });
+    const startups = await Startup.find({ founderId: req.user.userId }).select('_id');
+    if (!startups.length) return res.json({ data: [], totalCount: 0 });
 
-    const data = await Opportunity.find({ startupId: startup._id }).sort({ createdAt: -1 });
+    const startupIds = startups.map((s) => s._id);
+    const data = await Opportunity.find({ startupId: { $in: startupIds } })
+      .populate('startupId', 'startupName')
+      .sort({ createdAt: -1 });
     res.json({ data, totalCount: data.length });
   } catch (err) {
     res.status(500).json({ message: err.message });

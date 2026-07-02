@@ -1,14 +1,11 @@
 import Startup from '../models/Startup.js';
 import User from '../models/User.js';
 
-/* POST /api/startups — founder creates their startup */
+/* POST /api/startups — founder creates a startup (can create more than one) */
 export async function createStartup(req, res) {
   try {
     const { startupName, industry, fundingStage, description, logo } = req.body;
     const founder = await User.findById(req.user.userId);
-
-    const existing = await Startup.findOne({ founderId: req.user.userId });
-    if (existing) return res.status(409).json({ message: 'You already have a startup' });
 
     const startup = await Startup.create({
       startupName, industry, fundingStage, description, logo,
@@ -21,12 +18,11 @@ export async function createStartup(req, res) {
   }
 }
 
-/* GET /api/startups/mine — founder's own startup */
-export async function getMyStartup(req, res) {
+/* GET /api/startups/mine — all of the founder's own startups */
+export async function getMyStartups(req, res) {
   try {
-    const startup = await Startup.findOne({ founderId: req.user.userId });
-    if (!startup) return res.status(404).json({ message: 'No startup found' });
-    res.json(startup);
+    const startups = await Startup.find({ founderId: req.user.userId }).sort({ createdAt: -1 });
+    res.json(startups);
   } catch (err) {
     res.status(500).json({ message: err.message });
   }

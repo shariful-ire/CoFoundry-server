@@ -64,13 +64,14 @@ export async function getApplicationsForOpportunity(req, res) {
   }
 }
 
-/* GET /api/applications/founder — all apps across founder's opportunities */
+/* GET /api/applications/founder — all apps across all of the founder's startups' opportunities */
 export async function getFounderApplications(req, res) {
   try {
-    const startup = await Startup.findOne({ founderId: req.user.userId });
-    if (!startup) return res.json([]);
+    const startups = await Startup.find({ founderId: req.user.userId }).select('_id');
+    if (!startups.length) return res.json([]);
 
-    const opps   = await Opportunity.find({ startupId: startup._id }).select('_id');
+    const startupIds = startups.map((s) => s._id);
+    const opps   = await Opportunity.find({ startupId: { $in: startupIds } }).select('_id');
     const oppIds = opps.map((o) => o._id);
 
     const apps = await Application.find({ opportunityId: { $in: oppIds } })
